@@ -138,6 +138,9 @@ begin
   if auth.uid() is null then raise exception 'authentication required'; end if;
   select * into inv from public.household_invitations where token=invite_token and revoked_at is null and accepted_at is null and expires_at>now() for update;
   if not found then raise exception 'invitation expired or invalid'; end if;
+  if not private.is_household_admin(inv.household_id) or inv.created_by<>(select auth.uid()) then
+    raise exception 'invitation expired or invalid';
+  end if;
   perform 1 from public.households where id=inv.household_id for update;
   if exists(select 1 from public.household_members where household_id=inv.household_id and user_id=auth.uid()) then raise exception 'already a member'; end if;
   select count(*) into member_count from public.household_members where household_id=inv.household_id;
@@ -224,7 +227,9 @@ create policy "admins read invitations" on public.household_invitations for sele
 drop policy if exists "admins create invitations" on public.household_invitations;
 create policy "admins create invitations" on public.household_invitations for insert to authenticated with check(private.is_household_admin(household_id) and created_by=(select auth.uid()) and expires_at<=now()+interval '8 days' and expires_at>now());
 drop policy if exists "admins update invitations" on public.household_invitations;
-create policy "admins update invitations" on public.household_invitations for update to authenticated using(private.is_household_admin(household_id)) with check(private.is_household_admin(household_id));
+create policy "admins revoke invitations" on public.household_invitations for update to authenticated
+using(private.is_household_admin(household_id) and created_by=(select auth.uid()) and accepted_at is null and revoked_at is null)
+with check(private.is_household_admin(household_id) and created_by=(select auth.uid()) and accepted_by is null and accepted_at is null and revoked_at is not null and token is not null);
 
 do $$ declare t text; begin
  foreach t in array array['product_categories','products','purchase_records','product_status_events','household_tasks','task_completions','electric_meters','meter_readings','electricity_bills'] loop
